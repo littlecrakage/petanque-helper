@@ -52,14 +52,14 @@ def detect():
 
         short = min(pw, ph)
         min_r    = max(8,  int(short * 0.015))
-        max_r    = int(short * 0.28)          # balls can be very large in close-up shots
+        max_r    = int(short * 0.45)          # up to ~half the short dim for extreme close-ups
         min_dist = max(min_r * 2, int(short * 0.06))
 
         # HOUGH_GRADIENT_ALT uses a phase-coded accumulator; param2 is a circularity
         # score 0–1. Try strict first, relax if nothing found so real-world images
-        # (JPEG artefacts, angled shots, metallic reflections) still work.
+        # (JPEG artefacts, angled shots, metallic reflections, surface grooves) still work.
         circles = None
-        for p2 in (0.82, 0.75, 0.68):
+        for p2 in (0.82, 0.75, 0.68, 0.60):
             circles = cv2.HoughCircles(
                 blurred,
                 cv2.HOUGH_GRADIENT_ALT,
