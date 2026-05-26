@@ -222,6 +222,27 @@ body {
   color: rgba(255, 255, 255, 0.7);
 }
 
+.size-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.size-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 58px;
+}
+
+#jack-size {
+  flex: 1;
+  accent-color: var(--jack);
+  height: 4px;
+  cursor: pointer;
+}
+
 .action-row {
   display: flex;
   gap: 7px;

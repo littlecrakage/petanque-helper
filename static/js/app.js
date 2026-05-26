@@ -21,6 +21,7 @@ const state = {
   zoom: 1,
   panX: 0,
   panY: 0,
+  jackR: 25,    // jack circle radius in image pixels
   stream: null,
   detecting: false,
 };
@@ -53,6 +54,11 @@ async function init() {
     fileInput.value = '';
   });
   zoomResetBtn.addEventListener('click', resetZoom);
+
+  document.getElementById('jack-size').addEventListener('input', e => {
+    state.jackR = +e.target.value;
+    redraw();
+  });
 
   document.querySelectorAll('.tool-btn').forEach(btn => {
     btn.addEventListener('click', () => setTool(btn.dataset.tool));
@@ -115,6 +121,7 @@ function capturePhoto() {
     resetMarkers(false);
     switchMode('analysis');
     updateCanvasLayout();
+    syncJackSlider();
     redraw();
   };
   img.src = tmp.toDataURL('image/jpeg', 0.92);
@@ -131,10 +138,19 @@ function loadFromFile(file) {
     resetMarkers(false);
     switchMode('analysis');
     updateCanvasLayout();
+    syncJackSlider();
     redraw();
     URL.revokeObjectURL(url);
   };
   img.src = url;
+}
+
+function syncJackSlider() {
+  // Default jack radius = 2.5% of image width, clamped to slider range
+  state.jackR = Math.max(3, Math.min(300, Math.round(state.imgW * 0.025)));
+  const slider = document.getElementById('jack-size');
+  slider.max   = Math.round(state.imgW * 0.12);  // max = 12% of image width
+  slider.value = state.jackR;
 }
 
 // ── Canvas layout ─────────────────────────────────────────────────────
@@ -235,7 +251,8 @@ function findMarkerAt(cx, cy) {
   const hit = MARKER_R * 2.2;
   if (state.cochonnet) {
     const p = toC(state.cochonnet);
-    if (Math.hypot(cx - p.x, cy - p.y) < hit) return { type: 'cochonnet', index: 0 };
+    const jackHit = Math.max(hit, state.jackR * state.scale * state.zoom);
+    if (Math.hypot(cx - p.x, cy - p.y) < jackHit) return { type: 'cochonnet', index: 0 };
   }
   for (let i = 0; i < state.teamA.length; i++) {
     const p = toC(state.teamA[i]);
@@ -634,19 +651,22 @@ function drawMarker(pos, color, label, highlighted = false) {
   ctx.restore();
 }
 
-// Small crosshair so the marker sits precisely on the jack without obscuring it
+// Resizable circle outline — drag the slider to match the real jack's size
 function drawJack(pos, highlighted = false) {
-  const r   = highlighted ? 9 : 7;
-  const arm = highlighted ? 13 : 11;
+  const r   = state.jackR * state.scale * state.zoom;
+  const arm = 6;
   ctx.save();
   ctx.strokeStyle = '#f5a623';
   ctx.lineWidth   = highlighted ? 2.5 : 2;
   ctx.lineCap     = 'round';
   ctx.shadowColor = highlighted ? '#f5a623' : 'rgba(0,0,0,0.8)';
   ctx.shadowBlur  = highlighted ? 12 : 6;
+  // Resizable circle
   ctx.beginPath();
-  ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+  ctx.arc(pos.x, pos.y, Math.max(4, r), 0, Math.PI * 2);
   ctx.stroke();
+  // Small fixed-size center cross so the center is always visible
+  ctx.shadowBlur = 0;
   ctx.beginPath();
   ctx.moveTo(pos.x - arm, pos.y); ctx.lineTo(pos.x + arm, pos.y);
   ctx.moveTo(pos.x, pos.y - arm); ctx.lineTo(pos.x, pos.y + arm);
