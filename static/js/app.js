@@ -558,18 +558,24 @@ function redraw() {
   // Active drag (for highlight)
   const activeDrag = dragTarget || mouseTarget;
 
+  const jC = state.cochonnet ? toC(state.cochonnet) : null;
+
   for (let i = 0; i < state.teamA.length; i++) {
     const hi = activeDrag && activeDrag.type === 'team-a' && activeDrag.index === i;
-    drawMarker(toC(state.teamA[i]), '#4a9eda', `A${i + 1}`, hi);
+    const bC = toC(state.teamA[i]);
+    jC ? drawBallMarker(bC, jC, '#4a9eda', `A${i + 1}`, hi)
+       : drawMarker(bC, '#4a9eda', `A${i + 1}`, hi);
   }
   for (let i = 0; i < state.teamB.length; i++) {
     const hi = activeDrag && activeDrag.type === 'team-b' && activeDrag.index === i;
-    drawMarker(toC(state.teamB[i]), '#e74c3c', `B${i + 1}`, hi);
+    const bC = toC(state.teamB[i]);
+    jC ? drawBallMarker(bC, jC, '#e74c3c', `B${i + 1}`, hi)
+       : drawMarker(bC, '#e74c3c', `B${i + 1}`, hi);
   }
 
-  if (state.cochonnet) {
+  if (jC) {
     const hi = !!(activeDrag && activeDrag.type === 'cochonnet');
-    drawJack(toC(state.cochonnet), hi);
+    drawJack(jC, hi);
   }
 }
 
@@ -628,31 +634,102 @@ function drawMarker(pos, color, label, highlighted = false) {
   ctx.restore();
 }
 
+// Small crosshair so the marker sits precisely on the jack without obscuring it
 function drawJack(pos, highlighted = false) {
-  const r = highlighted ? MARKER_R + 5 : MARKER_R;
+  const r   = highlighted ? 9 : 7;
+  const arm = highlighted ? 13 : 11;
   ctx.save();
-  ctx.shadowColor = highlighted ? '#f5a623' : 'rgba(0,0,0,0.55)';
-  ctx.shadowBlur  = highlighted ? 14 : 6;
-  // Outer ring
-  ctx.beginPath();
-  ctx.arc(pos.x, pos.y, r + 4, 0, Math.PI * 2);
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-  ctx.lineWidth   = 2;
-  ctx.stroke();
-  // Fill
+  ctx.strokeStyle = '#f5a623';
+  ctx.lineWidth   = highlighted ? 2.5 : 2;
+  ctx.lineCap     = 'round';
+  ctx.shadowColor = highlighted ? '#f5a623' : 'rgba(0,0,0,0.8)';
+  ctx.shadowBlur  = highlighted ? 12 : 6;
   ctx.beginPath();
   ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
-  ctx.fillStyle   = '#f5a623';
-  ctx.fill();
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth   = highlighted ? 3 : 2;
   ctx.stroke();
-  ctx.shadowBlur  = 0;
+  ctx.beginPath();
+  ctx.moveTo(pos.x - arm, pos.y); ctx.lineTo(pos.x + arm, pos.y);
+  ctx.moveTo(pos.x, pos.y - arm); ctx.lineTo(pos.x, pos.y + arm);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Perpendicular tick at ball position + arrow shaft pointing toward jack
+function drawBallMarker(ballC, jackC, color, label, highlighted = false) {
+  const dx  = jackC.x - ballC.x;
+  const dy  = jackC.y - ballC.y;
+  const len = Math.hypot(dx, dy);
+
+  if (len < 2) {
+    // Fallback: just draw a dot when ball and jack coincide
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(ballC.x, ballC.y, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  const ux = dx / len;  // unit vector toward jack
+  const uy = dy / len;
+  const px = -uy;       // perpendicular unit vector (CCW 90°)
+  const py = ux;
+
+  const tickLen  = highlighted ? 16 : 13;
+  const shaftLen = highlighted ? 26 : 20;
+  const headSize = 7;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle   = color;
+  ctx.lineWidth   = highlighted ? 2.5 : 2;
+  ctx.lineCap     = 'round';
+  ctx.shadowColor = highlighted ? color : 'rgba(0,0,0,0.7)';
+  ctx.shadowBlur  = highlighted ? 12 : 5;
+
+  // Perpendicular tick
+  ctx.beginPath();
+  ctx.moveTo(ballC.x - px * tickLen, ballC.y - py * tickLen);
+  ctx.lineTo(ballC.x + px * tickLen, ballC.y + py * tickLen);
+  ctx.stroke();
+
+  // Arrow shaft toward jack
+  const tipX = ballC.x + ux * shaftLen;
+  const tipY = ballC.y + uy * shaftLen;
+  ctx.beginPath();
+  ctx.moveTo(ballC.x, ballC.y);
+  ctx.lineTo(tipX, tipY);
+  ctx.stroke();
+
+  // Filled arrowhead
+  ctx.shadowBlur = 0;
+  const angle = Math.atan2(uy, ux);
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(
+    tipX - Math.cos(angle - Math.PI / 6) * headSize,
+    tipY - Math.sin(angle - Math.PI / 6) * headSize,
+  );
+  ctx.lineTo(
+    tipX - Math.cos(angle + Math.PI / 6) * headSize,
+    tipY - Math.sin(angle + Math.PI / 6) * headSize,
+  );
+  ctx.closePath();
+  ctx.fill();
+
+  // Label — placed on the side of the ball away from the jack
+  const lx = ballC.x - ux * 22;
+  const ly = ballC.y - uy * 22;
   ctx.font         = 'bold 11px -apple-system, sans-serif';
-  ctx.fillStyle    = '#fff';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('J', pos.x, pos.y + 0.5);
+  const tw = ctx.measureText(label).width;
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  roundRect(ctx, lx - tw / 2 - 4, ly - 9, tw + 8, 18, 4);
+  ctx.fill();
+  ctx.fillStyle = color;
+  ctx.fillText(label, lx, ly + 0.5);
   ctx.restore();
 }
 
