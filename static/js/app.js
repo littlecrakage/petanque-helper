@@ -6,31 +6,34 @@ const SNAP_R   = 28;      // snap-to-suggestion radius (CSS px)
 // ── State ─────────────────────────────────────────────────────────────
 
 const state = {
-  mode: 'camera',            // 'camera' | 'analysis'
-  tool: 'cochonnet',         // active marking tool
-  cochonnet: null,           // {x, y} in image px
-  teamA: [],                 // [{x, y}] in image px
-  teamB: [],                 // [{x, y}] in image px
-  suggestions: [],           // [{x, y, r}] from auto-detect, not yet assigned
-  capturedImage: null,       // HTMLImageElement
+  mode: 'camera',
+  tool: 'cochonnet',
+  cochonnet: null,
+  teamA: [],
+  teamB: [],
+  suggestions: [],
+  capturedImage: null,
   imgW: 0,
   imgH: 0,
-  // canvas → image transform
   scale: 1,
   offX: 0,
   offY: 0,
+  zoom: 1,
+  panX: 0,
+  panY: 0,
   stream: null,
   detecting: false,
 };
 
 // ── DOM ───────────────────────────────────────────────────────────────
 
-const video       = document.getElementById('video');
-const canvas      = document.getElementById('canvas');
-const ctx         = canvas.getContext('2d');
+const video          = document.getElementById('video');
+const canvas         = document.getElementById('canvas');
+const ctx            = canvas.getContext('2d');
 const cameraModeEl   = document.getElementById('camera-mode');
 const analysisModeEl = document.getElementById('analysis-mode');
-const resultsEl   = document.getElementById('results-panel');
+const resultsEl      = document.getElementById('results-panel');
+const zoomResetBtn   = document.getElementById('zoom-reset-btn');
 
 // ── Init ──────────────────────────────────────────────────────────────
 
@@ -41,13 +44,21 @@ async function init() {
   document.getElementById('detect-btn').addEventListener('click', autoDetect);
   document.getElementById('reset-btn').addEventListener('click', () => resetMarkers(true));
   document.getElementById('new-btn').addEventListener('click', () => switchMode('camera'));
+  zoomResetBtn.addEventListener('click', resetZoom);
 
   document.querySelectorAll('.tool-btn').forEach(btn => {
     btn.addEventListener('click', () => setTool(btn.dataset.tool));
   });
 
-  canvas.addEventListener('touchstart', onTouch, { passive: false });
-  canvas.addEventListener('click', onClick);
+  canvas.addEventListener('touchstart',  onTouchStart, { passive: false });
+  canvas.addEventListener('touchmove',   onTouchMove,  { passive: false });
+  canvas.addEventListener('touchend',    onTouchEnd,   { passive: false });
+  canvas.addEventListener('touchcancel', onTouchEnd,   { passive: false });
+  canvas.addEventListener('click',       onClick);
+  canvas.addEventListener('wheel',       onWheel, { passive: false });
+  canvas.addEventListener('mousedown',   onMouseDown);
+  canvas.addEventListener('mousemove',   onMouseMove);
+  canvas.addEventListener('mouseup',     onMouseUp);
 
   window.addEventListener('resize', onResize);
   window.addEventListener('orientationchange', () => setTimeout(onResize, 120));
@@ -114,12 +125,18 @@ function updateCanvasLayout() {
   state.offX  = (cW - state.imgW * s) / 2;
   state.offY  = (cH - state.imgH * s) / 2;
 
+  state.zoom = 1;
+  state.panX = 0;
+  state.panY = 0;
+
   // Setting canvas.width resets the context transform — apply DPR scale once after
   canvas.width  = cW * dpr;
   canvas.height = cH * dpr;
   canvas.style.width  = cW + 'px';
   canvas.style.height = cH + 'px';
   ctx.scale(dpr, dpr);
+
+  updateZoomIndicator();
 }
 
 function onResize() {
@@ -129,32 +146,317 @@ function onResize() {
   }
 }
 
-// ── Interaction ───────────────────────────────────────────────────────
+// ── Coordinate helpers ────────────────────────────────────────────────
 
-let lastTouchTime = 0;
-
-function onTouch(e) {
-  e.preventDefault();
-  if (e.touches.length !== 1) return;
-  lastTouchTime = Date.now();
-  const t   = e.touches[0];
-  const r   = canvas.getBoundingClientRect();
-  interact(t.clientX - r.left, t.clientY - r.top);
+function toC(p) {
+  const s = state.scale * state.zoom;
+  return { x: p.x * s + state.offX + state.panX, y: p.y * s + state.offY + state.panY };
 }
 
-function onClick(e) {
-  // Prevent double-firing after touch events
-  if (Date.now() - lastTouchTime < 500) return;
+function screenToImg(cx, cy) {
+  const s = state.scale * state.zoom;
+  return {
+    x: Math.max(0, Math.min(state.imgW, (cx - state.offX - state.panX) / s)),
+    y: Math.max(0, Math.min(state.imgH, (cy - state.offY - state.panY) / s)),
+  };
+}
+
+function clampPan() {
+  if (state.zoom <= 1.0) {
+    state.panX = 0;
+    state.panY = 0;
+    return;
+  }
+  const s  = state.scale * state.zoom;
+  const iw = state.imgW * s;
+  const ih = state.imgH * s;
+  const W  = canvas.clientWidth;
+  const H  = canvas.clientHeight;
+  const mg = 40;
+  state.panX = Math.max(mg - state.offX - iw, Math.min(W - mg - state.offX, state.panX));
+  state.panY = Math.max(mg - state.offY - ih, Math.min(H - mg - state.offY, state.panY));
+}
+
+function resetZoom() {
+  state.zoom = 1;
+  state.panX = 0;
+  state.panY = 0;
+  updateZoomIndicator();
+  redraw();
+}
+
+function updateZoomIndicator() {
+  const zoomed = state.zoom > 1.05;
+  zoomResetBtn.textContent = state.zoom.toFixed(1) + '×  ✕';
+  zoomResetBtn.classList.toggle('hidden', !zoomed);
+}
+
+// ── Touch gestures ────────────────────────────────────────────────────
+
+let lastTouchTime    = 0;
+let touch1           = null;
+let touch2           = null;
+let touchStartX      = 0;
+let touchStartY      = 0;
+let touchHasMoved    = false;
+let isPanning        = false;
+let initialPinchDist = 0;
+let initialZoom      = 1;
+let initialPanX      = 0;
+let initialPanY      = 0;
+let dragTarget       = null;
+
+function findMarkerAt(cx, cy) {
+  const hit = MARKER_R * 2.2;
+  if (state.cochonnet) {
+    const p = toC(state.cochonnet);
+    if (Math.hypot(cx - p.x, cy - p.y) < hit) return { type: 'cochonnet', index: 0 };
+  }
+  for (let i = 0; i < state.teamA.length; i++) {
+    const p = toC(state.teamA[i]);
+    if (Math.hypot(cx - p.x, cy - p.y) < hit) return { type: 'team-a', index: i };
+  }
+  for (let i = 0; i < state.teamB.length; i++) {
+    const p = toC(state.teamB[i]);
+    if (Math.hypot(cx - p.x, cy - p.y) < hit) return { type: 'team-b', index: i };
+  }
+  return null;
+}
+
+function moveMarker(target, cx, cy) {
+  const pos = screenToImg(cx, cy);
+  if (target.type === 'cochonnet')   state.cochonnet = pos;
+  else if (target.type === 'team-a') state.teamA[target.index] = pos;
+  else if (target.type === 'team-b') state.teamB[target.index] = pos;
+}
+
+function onTouchStart(e) {
+  e.preventDefault();
   const r = canvas.getBoundingClientRect();
-  interact(e.clientX - r.left, e.clientY - r.top);
+
+  if (e.touches.length === 1) {
+    const t  = e.touches[0];
+    const cx = t.clientX - r.left;
+    const cy = t.clientY - r.top;
+    touch1        = { id: t.identifier, x: cx, y: cy };
+    touch2        = null;
+    touchStartX   = cx;
+    touchStartY   = cy;
+    touchHasMoved = false;
+    isPanning     = false;
+    dragTarget    = findMarkerAt(cx, cy);
+  } else if (e.touches.length === 2) {
+    dragTarget  = null;
+    isPanning   = true;
+    const t1    = e.touches[0];
+    const t2    = e.touches[1];
+    touch1 = { id: t1.identifier, x: t1.clientX - r.left, y: t1.clientY - r.top };
+    touch2 = { id: t2.identifier, x: t2.clientX - r.left, y: t2.clientY - r.top };
+    initialPinchDist = Math.hypot(touch2.x - touch1.x, touch2.y - touch1.y);
+    initialZoom  = state.zoom;
+    initialPanX  = state.panX;
+    initialPanY  = state.panY;
+  }
+}
+
+function onTouchMove(e) {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+
+  if (e.touches.length === 1 && touch1) {
+    const t  = e.touches[0];
+    const cx = t.clientX - r.left;
+    const cy = t.clientY - r.top;
+
+    if (dragTarget) {
+      touchHasMoved = true;
+      moveMarker(dragTarget, cx, cy);
+      redraw();
+      updateResults();
+    } else {
+      const dx = cx - touchStartX;
+      const dy = cy - touchStartY;
+      if (isPanning || Math.hypot(dx, dy) > 8) {
+        if (!isPanning) {
+          isPanning   = true;
+          initialPanX = state.panX;
+          initialPanY = state.panY;
+        }
+        touchHasMoved = true;
+        state.panX    = initialPanX + (cx - touchStartX);
+        state.panY    = initialPanY + (cy - touchStartY);
+        clampPan();
+        updateZoomIndicator();
+        redraw();
+      }
+    }
+  } else if (e.touches.length === 2 && touch1 && touch2) {
+    const t1 = e.touches[0];
+    const t2 = e.touches[1];
+    const c1 = { x: t1.clientX - r.left, y: t1.clientY - r.top };
+    const c2 = { x: t2.clientX - r.left, y: t2.clientY - r.top };
+    touchHasMoved = true;
+
+    const newDist = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+    const newZoom = Math.max(0.8, Math.min(8, initialZoom * (newDist / initialPinchDist)));
+
+    // Keep the initial pinch midpoint fixed in image space
+    const midX0 = (touch1.x + touch2.x) / 2;
+    const midY0 = (touch1.y + touch2.y) / 2;
+    const midX1 = (c1.x + c2.x) / 2;
+    const midY1 = (c1.y + c2.y) / 2;
+    const s  = state.scale;
+    const ix = (midX0 - state.offX - initialPanX) / (s * initialZoom);
+    const iy = (midY0 - state.offY - initialPanY) / (s * initialZoom);
+
+    state.zoom = newZoom;
+    state.panX = midX1 - state.offX - ix * s * newZoom;
+    state.panY = midY1 - state.offY - iy * s * newZoom;
+
+    clampPan();
+    updateZoomIndicator();
+    redraw();
+  }
+}
+
+function onTouchEnd(e) {
+  e.preventDefault();
+
+  if (dragTarget && touchHasMoved) {
+    // Finished dragging a marker
+    dragTarget    = null;
+    lastTouchTime = Date.now();
+  } else if (!touchHasMoved && e.changedTouches.length === 1) {
+    // Short tap — place or erase (but not on an existing marker in placement mode)
+    lastTouchTime = Date.now();
+    const r  = canvas.getBoundingClientRect();
+    const t  = e.changedTouches[0];
+    const cx = t.clientX - r.left;
+    const cy = t.clientY - r.top;
+    if (state.tool === 'erase' || !dragTarget) {
+      interact(cx, cy);
+    }
+  }
+
+  dragTarget = null;
+
+  if (e.touches.length === 0) {
+    touch1    = null;
+    touch2    = null;
+    isPanning = false;
+  } else if (e.touches.length === 1) {
+    // One finger lifted during pinch — reset for remaining finger
+    touch2        = null;
+    isPanning     = false;
+    const t       = e.touches[0];
+    const r       = canvas.getBoundingClientRect();
+    touch1        = { id: t.identifier, x: t.clientX - r.left, y: t.clientY - r.top };
+    touchStartX   = touch1.x;
+    touchStartY   = touch1.y;
+    touchHasMoved = false;
+    initialPanX   = state.panX;
+    initialPanY   = state.panY;
+  }
+}
+
+// ── Mouse (desktop) ───────────────────────────────────────────────────
+
+let mouseDown      = false;
+let mouseMoved     = false;
+let mouseStartX    = 0;
+let mouseStartY    = 0;
+let mousePanStartX = 0;
+let mousePanStartY = 0;
+let mouseTarget    = null;
+
+function onMouseDown(e) {
+  if (Date.now() - lastTouchTime < 500) return;
+  const r  = canvas.getBoundingClientRect();
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+  mouseDown      = true;
+  mouseMoved     = false;
+  mouseStartX    = cx;
+  mouseStartY    = cy;
+  mousePanStartX = state.panX;
+  mousePanStartY = state.panY;
+  mouseTarget    = findMarkerAt(cx, cy);
+  if (mouseTarget) canvas.style.cursor = 'grabbing';
+}
+
+function onMouseMove(e) {
+  const r  = canvas.getBoundingClientRect();
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+
+  if (!mouseDown) {
+    canvas.style.cursor = findMarkerAt(cx, cy) ? 'grab' : 'crosshair';
+    return;
+  }
+
+  if (Math.hypot(cx - mouseStartX, cy - mouseStartY) < 4) return;
+  mouseMoved = true;
+
+  if (mouseTarget) {
+    moveMarker(mouseTarget, cx, cy);
+    redraw();
+    updateResults();
+  } else {
+    state.panX = mousePanStartX + (cx - mouseStartX);
+    state.panY = mousePanStartY + (cy - mouseStartY);
+    clampPan();
+    updateZoomIndicator();
+    redraw();
+  }
+}
+
+function onMouseUp() {
+  mouseDown   = false;
+  mouseTarget = null;
+  canvas.style.cursor = 'crosshair';
+}
+
+function onWheel(e) {
+  e.preventDefault();
+  const r  = canvas.getBoundingClientRect();
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+
+  const factor  = e.deltaY > 0 ? 0.85 : 1.18;
+  const newZoom = Math.max(0.8, Math.min(8, state.zoom * factor));
+
+  // Keep the point under the cursor fixed in image space
+  const s  = state.scale;
+  const ix = (cx - state.offX - state.panX) / (s * state.zoom);
+  const iy = (cy - state.offY - state.panY) / (s * state.zoom);
+
+  state.zoom = newZoom;
+  state.panX = cx - state.offX - ix * s * newZoom;
+  state.panY = cy - state.offY - iy * s * newZoom;
+
+  clampPan();
+  updateZoomIndicator();
+  redraw();
+}
+
+// ── Interaction (place / erase markers) ──────────────────────────────
+
+function onClick(e) {
+  if (Date.now() - lastTouchTime < 500) return;
+  if (mouseMoved) { mouseMoved = false; return; }
+  const r  = canvas.getBoundingClientRect();
+  const cx = e.clientX - r.left;
+  const cy = e.clientY - r.top;
+  // Don't place a new marker on top of an existing one
+  if (state.tool !== 'erase' && findMarkerAt(cx, cy)) return;
+  interact(cx, cy);
 }
 
 function interact(cx, cy) {
-  // Convert CSS-px canvas coords → image coords
-  const ix = (cx - state.offX) / state.scale;
-  const iy = (cy - state.offY) / state.scale;
+  const s  = state.scale * state.zoom;
+  const ix = (cx - state.offX - state.panX) / s;
+  const iy = (cy - state.offY - state.panY) / s;
 
-  // Ignore taps outside the image area
   if (ix < 0 || ix > state.imgW || iy < 0 || iy > state.imgH) return;
 
   const pt = { x: ix, y: iy };
@@ -162,12 +464,9 @@ function interact(cx, cy) {
   if (state.tool === 'erase') {
     erase(pt);
   } else {
-    // Snap to nearest suggestion within range
-    const snapR = SNAP_R / state.scale;
-    const si    = state.suggestions.findIndex(s => dist(s, pt) < snapR);
-    const pos   = si >= 0
-      ? { x: state.suggestions[si].x, y: state.suggestions[si].y }
-      : pt;
+    const snapR = SNAP_R / s;
+    const si    = state.suggestions.findIndex(sg => dist(sg, pt) < snapR);
+    const pos   = si >= 0 ? { x: state.suggestions[si].x, y: state.suggestions[si].y } : pt;
     if (si >= 0) state.suggestions.splice(si, 1);
 
     if      (state.tool === 'cochonnet') state.cochonnet = pos;
@@ -180,7 +479,7 @@ function interact(cx, cy) {
 }
 
 function erase(pt) {
-  const r = SNAP_R / state.scale;
+  const r = SNAP_R / (state.scale * state.zoom);
 
   if (state.cochonnet && dist(state.cochonnet, pt) < r) {
     state.cochonnet = null;
@@ -206,15 +505,16 @@ function redraw() {
   const H = canvas.clientHeight;
   ctx.clearRect(0, 0, W, H);
 
-  // Background image
+  const s = state.scale * state.zoom;
   ctx.drawImage(
     state.capturedImage,
-    state.offX, state.offY,
-    state.imgW * state.scale,
-    state.imgH * state.scale,
+    state.offX + state.panX,
+    state.offY + state.panY,
+    state.imgW * s,
+    state.imgH * s,
   );
 
-  // Distance lines (drawn behind markers)
+  // Distance lines (behind markers)
   if (state.cochonnet) {
     const c = toC(state.cochonnet);
     for (const b of state.teamA) drawLine(c, toC(b), '#4a9eda');
@@ -227,19 +527,25 @@ function redraw() {
     for (const b of state.teamB) drawDistLabel(toC(state.cochonnet), toC(b), dist(state.cochonnet, b), '#e74c3c');
   }
 
-  // Suggestion dots (gray dashed circles from auto-detect)
-  for (const s of state.suggestions) drawSuggestion(toC(s));
+  // Suggestion dots
+  for (const sg of state.suggestions) drawSuggestion(toC(sg));
 
-  // Team markers
-  for (let i = 0; i < state.teamA.length; i++) drawMarker(toC(state.teamA[i]), '#4a9eda', `A${i + 1}`);
-  for (let i = 0; i < state.teamB.length; i++) drawMarker(toC(state.teamB[i]), '#e74c3c', `B${i + 1}`);
+  // Active drag (for highlight)
+  const activeDrag = dragTarget || mouseTarget;
 
-  // Jack on top
-  if (state.cochonnet) drawJack(toC(state.cochonnet));
-}
+  for (let i = 0; i < state.teamA.length; i++) {
+    const hi = activeDrag && activeDrag.type === 'team-a' && activeDrag.index === i;
+    drawMarker(toC(state.teamA[i]), '#4a9eda', `A${i + 1}`, hi);
+  }
+  for (let i = 0; i < state.teamB.length; i++) {
+    const hi = activeDrag && activeDrag.type === 'team-b' && activeDrag.index === i;
+    drawMarker(toC(state.teamB[i]), '#e74c3c', `B${i + 1}`, hi);
+  }
 
-function toC(p) {
-  return { x: p.x * state.scale + state.offX, y: p.y * state.scale + state.offY };
+  if (state.cochonnet) {
+    const hi = !!(activeDrag && activeDrag.type === 'cochonnet');
+    drawJack(toC(state.cochonnet), hi);
+  }
 }
 
 function drawLine(a, b, color) {
@@ -276,16 +582,17 @@ function drawDistLabel(from, to, d, color) {
   ctx.restore();
 }
 
-function drawMarker(pos, color, label) {
+function drawMarker(pos, color, label, highlighted = false) {
+  const r = highlighted ? MARKER_R + 5 : MARKER_R;
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.55)';
-  ctx.shadowBlur  = 6;
+  ctx.shadowColor = highlighted ? color : 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur  = highlighted ? 14 : 6;
   ctx.beginPath();
-  ctx.arc(pos.x, pos.y, MARKER_R, 0, Math.PI * 2);
+  ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
   ctx.fillStyle = color;
   ctx.fill();
   ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-  ctx.lineWidth   = 2;
+  ctx.lineWidth   = highlighted ? 3 : 2;
   ctx.stroke();
   ctx.shadowBlur  = 0;
   ctx.font         = 'bold 10px -apple-system, sans-serif';
@@ -296,11 +603,11 @@ function drawMarker(pos, color, label) {
   ctx.restore();
 }
 
-function drawJack(pos) {
-  const r = MARKER_R;
+function drawJack(pos, highlighted = false) {
+  const r = highlighted ? MARKER_R + 5 : MARKER_R;
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.55)';
-  ctx.shadowBlur  = 6;
+  ctx.shadowColor = highlighted ? '#f5a623' : 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur  = highlighted ? 14 : 6;
   // Outer ring
   ctx.beginPath();
   ctx.arc(pos.x, pos.y, r + 4, 0, Math.PI * 2);
@@ -313,7 +620,7 @@ function drawJack(pos) {
   ctx.fillStyle   = '#f5a623';
   ctx.fill();
   ctx.strokeStyle = '#fff';
-  ctx.lineWidth   = 2;
+  ctx.lineWidth   = highlighted ? 3 : 2;
   ctx.stroke();
   ctx.shadowBlur  = 0;
   ctx.font         = 'bold 11px -apple-system, sans-serif';
@@ -390,7 +697,6 @@ async function autoDetect() {
   btn.disabled = true;
 
   try {
-    // Downscale before sending to reduce payload
     const maxDim = 1024;
     const s      = Math.min(maxDim / state.imgW, maxDim / state.imgH, 1);
     const tmp    = document.createElement('canvas');
@@ -407,9 +713,8 @@ async function autoDetect() {
     const data = await resp.json();
     if (data.error) throw new Error(data.error);
 
-    // Scale detected circle centres back to full-image coordinates
-    const scaleBack    = state.imgW / tmp.width;
-    state.suggestions  = data.circles.map(c => ({
+    const scaleBack   = state.imgW / tmp.width;
+    state.suggestions = data.circles.map(c => ({
       x: c.x * scaleBack,
       y: c.y * scaleBack,
       r: c.r * scaleBack,

@@ -143,6 +143,24 @@ body {
   cursor: crosshair;
 }
 
+.zoom-reset {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 14px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 10;
+  pointer-events: auto;
+  user-select: none;
+  letter-spacing: 0.3px;
+}
+
 /* ── Toolbar ─────────────────────────────── */
 
 .toolbar {
