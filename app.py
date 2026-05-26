@@ -50,13 +50,14 @@ def detect():
         gray = clahe.apply(gray)
         blurred = cv2.GaussianBlur(gray, (7, 7), 1.5)
 
-        min_r = max(8, int(min(pw, ph) * 0.02))
-        max_r = int(min(pw, ph) * 0.12)
-        min_dist = max(min_r * 2, int(min(pw, ph) * 0.06))
+        short = min(pw, ph)
+        min_r    = max(8,  int(short * 0.015))
+        max_r    = int(short * 0.28)          # balls can be very large in close-up shots
+        min_dist = max(min_r * 2, int(short * 0.06))
 
         # HOUGH_GRADIENT_ALT uses a phase-coded accumulator; param2 is a circularity
-        # score 0–1. Try strict first, relax once if nothing found so real-world
-        # images (JPEG artefacts, angled shots, metallic reflections) still work.
+        # score 0–1. Try strict first, relax if nothing found so real-world images
+        # (JPEG artefacts, angled shots, metallic reflections) still work.
         circles = None
         for p2 in (0.82, 0.75, 0.68):
             circles = cv2.HoughCircles(
@@ -64,7 +65,7 @@ def detect():
                 cv2.HOUGH_GRADIENT_ALT,
                 dp=1.5,
                 minDist=min_dist,
-                param1=200,
+                param1=150,
                 param2=p2,
                 minRadius=min_r,
                 maxRadius=max_r,
