@@ -54,19 +54,23 @@ def detect():
         max_r = int(min(pw, ph) * 0.12)
         min_dist = max(min_r * 2, int(min(pw, ph) * 0.06))
 
-        # HOUGH_GRADIENT_ALT (OpenCV ≥4.3) uses a phase-coded accumulator that is far
-        # more precise than HOUGH_GRADIENT. param2 is a circularity score 0–1; 0.85
-        # keeps only near-perfect circles and eliminates most stone false-positives.
-        circles = cv2.HoughCircles(
-            blurred,
-            cv2.HOUGH_GRADIENT_ALT,
-            dp=1.5,
-            minDist=min_dist,
-            param1=300,
-            param2=0.85,
-            minRadius=min_r,
-            maxRadius=max_r,
-        )
+        # HOUGH_GRADIENT_ALT uses a phase-coded accumulator; param2 is a circularity
+        # score 0–1. Try strict first, relax once if nothing found so real-world
+        # images (JPEG artefacts, angled shots, metallic reflections) still work.
+        circles = None
+        for p2 in (0.82, 0.75, 0.68):
+            circles = cv2.HoughCircles(
+                blurred,
+                cv2.HOUGH_GRADIENT_ALT,
+                dp=1.5,
+                minDist=min_dist,
+                param1=200,
+                param2=p2,
+                minRadius=min_r,
+                maxRadius=max_r,
+            )
+            if circles is not None:
+                break
 
         result = []
         if circles is not None:
@@ -85,7 +89,7 @@ def detect():
         return jsonify({'error': str(e)}), 500
 
 
-def _perimeter_has_clear_edge(gray, cx, cy, r, n_samples=36, min_fraction=0.50, grad_thresh=16):
+def _perimeter_has_clear_edge(gray, cx, cy, r, n_samples=36, min_fraction=0.45, grad_thresh=14):
     """Return True if most sampled points on the circle perimeter sit on a strong gradient.
 
     Pétanque balls have a continuous, well-defined circular edge; random stone
