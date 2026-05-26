@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0,
+                 user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Pétanque Helper</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Camera mode ──────────────────────────────────────────── -->
+  <div id="camera-mode" class="mode">
+    <div class="header">
+      <h1>🎯 Pétanque Helper</h1>
+    </div>
+
+    <div class="camera-container">
+      <video id="video" autoplay playsinline muted></video>
+      <div class="camera-hint">📱 Hold phone horizontally, camera toward the balls</div>
+    </div>
+
+    <div class="camera-controls">
+      <button id="capture-btn" class="btn btn-primary">📷 Capture</button>
+    </div>
+  </div>
+
+  <!-- ── Analysis mode ────────────────────────────────────────── -->
+  <div id="analysis-mode" class="mode hidden">
+
+    <!-- Results appear here when enough markers are placed -->
+    <div id="results-panel" class="hidden"></div>
+
+    <div class="canvas-container">
+      <canvas id="canvas"></canvas>
+    </div>
+
+    <div class="toolbar">
+      <!-- Tool selector -->
+      <div class="tool-row">
+        <button class="tool-btn active" data-tool="cochonnet">
+          <div class="tool-dot"></div>
+          <span>Jack</span>
+        </button>
+        <button class="tool-btn" data-tool="team-a">
+          <div class="tool-dot"></div>
+          <span>Team A</span>
+        </button>
+        <button class="tool-btn" data-tool="team-b">
+          <div class="tool-dot"></div>
+          <span>Team B</span>
+        </button>
+        <button class="tool-btn" data-tool="erase">
+          <div class="tool-dot">✕</div>
+          <span>Erase</span>
+        </button>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="action-row">
+        <button id="detect-btn" class="btn btn-secondary">🔍 Auto</button>
+        <button id="reset-btn"  class="btn btn-secondary">🔄 Reset</button>
+        <button id="new-btn"    class="btn btn-secondary">📷 New Photo</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
