@@ -96,6 +96,8 @@ body {
   padding-bottom: max(20px, env(safe-area-inset-bottom));
   display: flex;
   justify-content: center;
+  align-items: center;
+  gap: 12px;
   background: var(--surface);
   border-top: 1px solid var(--border);
   flex-shrink: 0;

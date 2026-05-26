@@ -44,6 +44,14 @@ async function init() {
   document.getElementById('detect-btn').addEventListener('click', autoDetect);
   document.getElementById('reset-btn').addEventListener('click', () => resetMarkers(true));
   document.getElementById('new-btn').addEventListener('click', () => switchMode('camera'));
+
+  const fileInput = document.getElementById('file-input');
+  document.getElementById('load-btn').addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (file) loadFromFile(file);
+    fileInput.value = '';
+  });
   zoomResetBtn.addEventListener('click', resetZoom);
 
   document.querySelectorAll('.tool-btn').forEach(btn => {
@@ -110,6 +118,23 @@ function capturePhoto() {
     redraw();
   };
   img.src = tmp.toDataURL('image/jpeg', 0.92);
+}
+
+function loadFromFile(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    state.capturedImage = img;
+    state.imgW = img.naturalWidth;
+    state.imgH = img.naturalHeight;
+    state.suggestions = [];
+    resetMarkers(false);
+    switchMode('analysis');
+    updateCanvasLayout();
+    redraw();
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
 }
 
 // ── Canvas layout ─────────────────────────────────────────────────────
