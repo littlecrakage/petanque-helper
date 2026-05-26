@@ -121,7 +121,7 @@ function capturePhoto() {
     resetMarkers(false);
     switchMode('analysis');
     updateCanvasLayout();
-    syncJackSlider();
+    try { syncJackSlider(); } catch (_) {}
     redraw();
   };
   img.src = tmp.toDataURL('image/jpeg', 0.92);
@@ -138,7 +138,7 @@ function loadFromFile(file) {
     resetMarkers(false);
     switchMode('analysis');
     updateCanvasLayout();
-    syncJackSlider();
+    try { syncJackSlider(); } catch (_) {}
     redraw();
     URL.revokeObjectURL(url);
   };
@@ -146,10 +146,10 @@ function loadFromFile(file) {
 }
 
 function syncJackSlider() {
-  // Default jack radius = 2.5% of image width, clamped to slider range
   state.jackR = Math.max(3, Math.min(300, Math.round(state.imgW * 0.025)));
   const slider = document.getElementById('jack-size');
-  slider.max   = Math.round(state.imgW * 0.12);  // max = 12% of image width
+  if (!slider) return;
+  slider.max   = Math.round(state.imgW * 0.12);
   slider.value = state.jackR;
 }
 
