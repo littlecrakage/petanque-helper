@@ -22,6 +22,7 @@ const state = {
   panX: 0,
   panY: 0,
   jackR: 25,    // jack circle radius in image pixels
+  ballR: 40,    // default ball radius in image pixels
   stream: null,
   detecting: false,
 };
@@ -58,6 +59,13 @@ async function init() {
   document.getElementById('jack-size').addEventListener('input', e => {
     state.jackR = +e.target.value;
     redraw();
+    updateResults();
+  });
+
+  document.getElementById('ball-size').addEventListener('input', e => {
+    state.ballR = +e.target.value;
+    redraw();
+    updateResults();
   });
 
   document.querySelectorAll('.tool-btn').forEach(btn => {
@@ -148,9 +156,17 @@ function loadFromFile(file) {
 function syncJackSlider() {
   state.jackR = Math.max(3, Math.min(300, Math.round(state.imgW * 0.025)));
   const slider = document.getElementById('jack-size');
-  if (!slider) return;
-  slider.max   = Math.round(state.imgW * 0.12);
-  slider.value = state.jackR;
+  if (slider) {
+    slider.max   = Math.round(state.imgW * 0.12);
+    slider.value = state.jackR;
+  }
+
+  state.ballR = Math.max(3, Math.min(300, Math.round(state.imgW * 0.08)));
+  const bslider = document.getElementById('ball-size');
+  if (bslider) {
+    bslider.max   = Math.round(state.imgW * 0.30);
+    bslider.value = state.ballR;
+  }
 }
 
 // ── Canvas layout ─────────────────────────────────────────────────────
@@ -266,10 +282,14 @@ function findMarkerAt(cx, cy) {
 }
 
 function moveMarker(target, cx, cy) {
-  const pos = screenToImg(cx, cy);
-  if (target.type === 'cochonnet')   state.cochonnet = pos;
-  else if (target.type === 'team-a') state.teamA[target.index] = pos;
-  else if (target.type === 'team-b') state.teamB[target.index] = pos;
+  const { x, y } = screenToImg(cx, cy);
+  if (target.type === 'cochonnet' && state.cochonnet) {
+    state.cochonnet.x = x; state.cochonnet.y = y;
+  } else if (target.type === 'team-a' && state.teamA[target.index]) {
+    state.teamA[target.index].x = x; state.teamA[target.index].y = y;
+  } else if (target.type === 'team-b' && state.teamB[target.index]) {
+    state.teamB[target.index].x = x; state.teamB[target.index].y = y;
+  }
 }
 
 function onTouchStart(e) {
@@ -508,7 +528,9 @@ function interact(cx, cy) {
   } else {
     const snapR = SNAP_R / s;
     const si    = state.suggestions.findIndex(sg => dist(sg, pt) < snapR);
-    const pos   = si >= 0 ? { x: state.suggestions[si].x, y: state.suggestions[si].y } : pt;
+    const pos   = si >= 0
+      ? { x: state.suggestions[si].x, y: state.suggestions[si].y, r: state.suggestions[si].r }
+      : { x: pt.x, y: pt.y, r: state.ballR };
     if (si >= 0) state.suggestions.splice(si, 1);
 
     if      (state.tool === 'cochonnet') state.cochonnet = pos;
@@ -556,17 +578,17 @@ function redraw() {
     state.imgH * s,
   );
 
-  // Distance lines (behind markers)
+  // Distance lines (behind markers) — drawn edge-to-edge
   if (state.cochonnet) {
     const c = toC(state.cochonnet);
-    for (const b of state.teamA) drawLine(c, toC(b), '#4a9eda');
-    for (const b of state.teamB) drawLine(c, toC(b), '#e74c3c');
+    for (const b of state.teamA) drawLine(c, toC(b), b.r !== undefined ? b.r : state.ballR, '#4a9eda');
+    for (const b of state.teamB) drawLine(c, toC(b), b.r !== undefined ? b.r : state.ballR, '#e74c3c');
   }
 
   // Distance labels
   if (state.cochonnet) {
-    for (const b of state.teamA) drawDistLabel(toC(state.cochonnet), toC(b), dist(state.cochonnet, b), '#4a9eda');
-    for (const b of state.teamB) drawDistLabel(toC(state.cochonnet), toC(b), dist(state.cochonnet, b), '#e74c3c');
+    for (const b of state.teamA) drawDistLabel(toC(state.cochonnet), toC(b), edgeDist(b), '#4a9eda');
+    for (const b of state.teamB) drawDistLabel(toC(state.cochonnet), toC(b), edgeDist(b), '#e74c3c');
   }
 
   // Suggestion dots
@@ -596,15 +618,28 @@ function redraw() {
   }
 }
 
-function drawLine(a, b, color) {
+function drawLine(jackC, ballC, ballRImg, color) {
+  const dx  = ballC.x - jackC.x;
+  const dy  = ballC.y - jackC.y;
+  const len = Math.hypot(dx, dy);
+  const jrC = state.jackR * state.scale * state.zoom;
+  const brC = ballRImg    * state.scale * state.zoom;
+  let x1 = jackC.x, y1 = jackC.y, x2 = ballC.x, y2 = ballC.y;
+  if (len > 1) {
+    const ux = dx / len, uy = dy / len;
+    x1 = jackC.x + ux * Math.min(jrC, len * 0.45);
+    y1 = jackC.y + uy * Math.min(jrC, len * 0.45);
+    x2 = ballC.x - ux * Math.min(brC, len * 0.45);
+    y2 = ballC.y - uy * Math.min(brC, len * 0.45);
+  }
   ctx.save();
   ctx.strokeStyle = color;
   ctx.lineWidth   = 1.5;
   ctx.setLineDash([5, 4]);
   ctx.globalAlpha = 0.6;
   ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.lineTo(b.x, b.y);
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
   ctx.stroke();
   ctx.restore();
 }
@@ -782,8 +817,8 @@ function updateResults() {
     return;
   }
 
-  const dA = state.teamA.map(b => dist(state.cochonnet, b)).sort((a, b) => a - b);
-  const dB = state.teamB.map(b => dist(state.cochonnet, b)).sort((a, b) => a - b);
+  const dA = state.teamA.map(b => edgeDist(b)).sort((a, b) => a - b);
+  const dB = state.teamB.map(b => edgeDist(b)).sort((a, b) => a - b);
   const mA = dA[0];
   const mB = dB[0];
 
@@ -862,6 +897,11 @@ async function autoDetect() {
 
 function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function edgeDist(ball) {
+  const r = ball.r !== undefined ? ball.r : state.ballR;
+  return Math.max(0, dist(state.cochonnet, ball) - r - state.jackR);
 }
 
 function resetMarkers(doRedraw) {

@@ -243,6 +243,13 @@ body {
   cursor: pointer;
 }
 
+#ball-size {
+  flex: 1;
+  accent-color: var(--text-muted);
+  height: 4px;
+  cursor: pointer;
+}
+
 .action-row {
   display: flex;
   gap: 7px;
